@@ -32,6 +32,9 @@ class BorrowedBookList(lib_dataclasses.BaseModel):
 class BookNotFound(Exception):
     pass
 
+class BookNotAvailable(Exception):
+    pass
+
 
 class AbstractBorrowBook(abc.ABC):
 
