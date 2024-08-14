@@ -1,0 +1,88 @@
+version: "3"
+services:
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    image: extra_backend:latest
+    restart: always
+    container_name: extra_backend
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ../../backend:/code/
+      - ../../volumes/static:/static/
+      - ../../volumes/media:/media/
+
+    env_file:
+      - .env.backend
+      - .env
+    entrypoint: python3 manage.py
+    command: runserver 0.0.0.0:8000
+    ports:
+      - "28000:8000"
+    depends_on:
+      - db
+
+  celery-beat:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    image: extra_backend:latest
+    container_name: celery-beat
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ../../backend:/code
+    entrypoint: celery -A runner.schedule
+    command: worker --beat --loglevel=DEBUG
+    env_file:
+      - .env.backend
+      - .env
+    depends_on:
+      - rabbitmq
+      - db
+
+
+  telegram_bot:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    image: extra_backend:latest
+    restart: always
+    container_name: telegram_bot
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ../../backend:/code/
+    env_file:
+      - .env.backend
+      - .env
+    entrypoint: python3 manage.py
+    command: run_telegram_listener
+    depends_on:
+      - db
+
+
+  db:
+    image: nexus.runc.info/mariadb:10.11
+    restart: always
+    container_name: db
+    command: --character-set-server=utf8 --collation-server=utf8_general_ci
+    volumes:
+      - ./mariadb-init.d:/docker-entrypoint-initdb.d
+      - ../../volumes/mariadb:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+    ports:
+      - "23306:3306"
+
+
+  rabbitmq:
+    image: nexus.runc.info/rabbitmq:3.12-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3 

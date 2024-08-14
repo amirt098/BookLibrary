@@ -1,0 +1,6 @@
+FROM nexus.runc.info/nginx:stable-alpine as production-stage
+COPY nginx.conf /etc/nginx/
+EXPOSE 80
+HEALTHCHECK CMD curl --fail http://localhost:80 || exit 1
+CMD ["nginx", "-g", "daemon off;"]
+
