@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from typing import List
 
+from django.db import transaction
 from django.utils import timezone
 
 from models import Book, BorrowedBook
@@ -45,28 +46,29 @@ class LibraryFacade:
 
     def borrow_book(self, input_data: interfaces.BorrowBookInput, penalty_rate_per_day=0.5) -> interfaces.BorrowBookOutput:
         try:
-            logger.info(f"Borrowing book with data: {input_data}")
-            book = Book.objects.get(id=input_data.book_id)
-            if book.quantity > 0:
-                book.quantity -= 1
-                book.save()
-                borrowed_book = BorrowedBook.objects.create(
-                    username=input_data.username,
-                    book_id=input_data.book_id,
-                    due_date=input_data.due_date
-                )
-                penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
-                logger.info(f"Book borrowed: {borrowed_book} with penalty: {penalty}")
-                return interfaces.BorrowBookOutput(
-                    id=borrowed_book.id,
-                    username=input_data.username,
-                    book_id=input_data.book_id,
-                    borrowed_date=str(borrowed_book.borrowed_date),
-                    due_date=str(borrowed_book.due_date),
-                    penalty=penalty
-                )
-            else:
-                raise ValueError("Book is not available")
+            with transaction.atomic():
+                logger.info(f"Borrowing book with data: {input_data}")
+                book = Book.objects.get(id=input_data.book_id)
+                if book.quantity > 0:
+                    book.quantity -= 1
+                    book.save()
+                    borrowed_book = BorrowedBook.objects.create(
+                        username=input_data.username,
+                        book_id=input_data.book_id,
+                        due_date=input_data.due_date
+                    )
+                    penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
+                    logger.info(f"Book borrowed: {borrowed_book} with penalty: {penalty}")
+                    return interfaces.BorrowBookOutput(
+                        id=borrowed_book.id,
+                        username=input_data.username,
+                        book_id=input_data.book_id,
+                        borrowed_date=str(borrowed_book.borrowed_date),
+                        due_date=str(borrowed_book.due_date),
+                        penalty=penalty
+                    )
+                else:
+                    raise ValueError("Book is not available")
         except Exception as e:
             logger.error(f"Failed to borrow book: {str(e)}")
             raise e
@@ -77,15 +79,15 @@ class LibraryFacade:
             books = Book.objects.all()
 
             if filters.title:
-                books = books.filter(title__icontains=filters.title)
+                books = books.filter(title__contains=filters.title)
             if filters.author:
-                books = books.filter(author__icontains=filters.author)
+                books = books.filter(author__contains=filters.author)
             if filters.isbn:
                 books = books.filter(isbn=filters.isbn)
             if filters.topic:
-                books = books.filter(topic__icontains=filters.topic)
+                books = books.filter(topic__contains=filters.topic)
             if filters.publisher:
-                books = books.filter(publisher__icontains=filters.publisher)
+                books = books.filter(publisher__contains=filters.publisher)
             if filters.date_published:
                 books = books.filter(date_published=filters.date_published)
 
@@ -123,7 +125,7 @@ class LibraryFacade:
                 interfaces.BorrowBookOutput(
                     id=borrowed_book.id,
                     username=borrowed_book.username,
-                    book_id=borrowed_book.book_id,
+                    book_id=borrowed_book.book_name,
                     borrowed_date=str(borrowed_book.borrowed_date),
                     due_date=str(borrowed_book.due_date),
                     penalty=borrowed_book.calculate_penalty(penalty_rate_per_day=0.5)
@@ -138,26 +140,27 @@ class LibraryFacade:
     def return_book(self, input_data: interfaces.ReturnBookInput,
                     penalty_rate_per_day=0.5) -> interfaces.ReturnBookOutput:
         try:
-            logger.info(f"Returning book with data: {input_data}")
-            borrowed_book = BorrowedBook.objects.get(id=input_data.borrowed_book_id)
-            book = Book.objects.get(id=borrowed_book.book_id)
+            with transaction.atomic():
+                logger.info(f"Returning book with data: {input_data}")
+                borrowed_book = BorrowedBook.objects.get(id=input_data.borrowed_book_id)
+                book = Book.objects.get(id=borrowed_book.book_name)
 
-            if book.quantity is not None:
-                book.quantity += 1
-                book.save()
+                if book.quantity is not None:
+                    book.quantity += 1
+                    book.save()
 
-            # Calculate penalty
-            penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
-            borrowed_book.delete()  # Remove the record of the borrowed book
+                penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
+                borrowed_book.borrowed_date = datetime.now().date()
+                borrowed_book.save()
 
-            logger.info(f"Book returned: {borrowed_book} with penalty: {penalty}")
-            return interfaces.ReturnBookOutput(
-                id=borrowed_book.id,
-                username=input_data.username,
-                book_id=borrowed_book.book_id,
-                return_date=str(datetime.now().date()),
-                penalty=penalty
-            )
+                logger.info(f"Book returned: {borrowed_book} with penalty: {penalty}")
+                return interfaces.ReturnBookOutput(
+                    id=borrowed_book.id,
+                    username=input_data.username,
+                    book_id=borrowed_book.book_name,
+                    return_date=str(datetime.now().date()),
+                    penalty=penalty
+                )
         except BorrowedBook.DoesNotExist:
             logger.error("Borrowed book record not found.")
             raise ValueError("Borrowed book record not found.")

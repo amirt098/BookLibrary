@@ -4,8 +4,9 @@ from typing import List
 
 from apps.account.interfaces import AbstractAccountService
 from apps.account.services import AccountService
-from apps.book.interfaces import AbstractBookService
-from apps.book.services import BookService
+from apps.borrowing_book.interfaces import AbstractLibraryFacade
+from apps.borrowing_book.services import LibraryFacade
+from apps.telegram_bot.services import TelegramBotService
 # apps abstractions
 
 
@@ -18,7 +19,6 @@ from externals.telegram_bot.services import TelegramApplicationFactory
 # utils
 from utils.date_time.services import DateTimeUtils
 from utils.number_formatter.services import NumberFormatter
-from utils.currency_image_generator.services import CurrencyImageGeneratorService
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +57,28 @@ class Bootstrapper:
         _telegram_application_factory = kwargs.get('telegram_application_factory', TelegramApplicationFactory())
 
         self._account_service = kwargs.get('account_service', AccountService())
-        self._book_service = kwargs.get('account_service', BookService())
+        self._borrowing_book_service = kwargs.get('borrowing_book_service', LibraryFacade())
+
+        self.telegram_bot = kwargs.get(
+            'telegram_bot_service',
+            TelegramBotService(
+                telegram_application_factory=_telegram_application_factory,
+                telegram_api_address=_telegram_base_address,
+                telegram_proxy=_telegram_proxy,
+                account_service=self._account_service,
+                borrowing_book=self._borrowing_book_service,
+                date_time_utils=_date_time_utils,
+            )
+                                       )
 
     def get_account_service(self) -> AbstractAccountService:
         return self._account_service
 
-    def get_book_service(self) -> AbstractBookService:
-        return self._book_service
+    def get_book_service(self) -> AbstractLibraryFacade:
+        return self._borrowing_book_service
+
+    def get_telegram_bot(self):
+        return self.telegram_bot
 
 
 def get_bootstrapper(**kwargs) -> Bootstrapper:

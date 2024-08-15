@@ -53,6 +53,19 @@ class BorrowedBookFilter(BaseModel):
     borrowed_date: Optional[str] = None
 
 
+class ReturnBookOutput(BaseModel):
+    id: int
+    username: str
+    book_id: int
+    return_date: str
+    penalty: int
+
+
+class ReturnBookInput(BaseModel):
+    borrowed_book_id: int
+    username: str
+
+
 class AbstractLibraryFacade(ABC):
 
     @abstractmethod

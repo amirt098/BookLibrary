@@ -19,13 +19,13 @@ class Book(models.Model):
 # BorrowedBook Model
 class BorrowedBook(models.Model):
     username = models.CharField(max_length=150)
-    book_id = models.IntegerField()
+    book_name = models.CharField(max_length=255)
     borrowed_date = models.DateTimeField(auto_now_add=True)
     return_date = models.DateTimeField(null=True, blank=True)
     due_date = models.DateTimeField()
 
     def __str__(self):
-        return f'{self.book_id} borrowed by {self.username}'
+        return f'{self.book_name} borrowed by {self.username}'
 
     def is_overdue(self):
         return timezone.now() > self.due_date
