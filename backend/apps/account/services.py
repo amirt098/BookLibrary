@@ -1,8 +1,6 @@
 import logging
-from django.core.exceptions import ObjectDoesNotExist
 from .models import User
-import interfaces
-
+from . import interfaces
 logger = logging.getLogger(__name__)
 
 
@@ -32,16 +30,17 @@ class AccountService(interfaces.AbstractAccountService):
         result = self._convert_user_to_user_info(new_user)
         logger.info(f'result: {result}')
 
-    def telegram_authentication(self, telegram_id) -> interfaces.UserClaim:
+    async def telegram_authentication(self, telegram_id) -> interfaces.UserClaim:
         logger.info(f"telegram_id: {telegram_id}")
         try:
-            account = User.objects.get(telegram_id=telegram_id)
-            result = interfaces.UserClaim(username=account.username, telegram_id=account.telegram_id)
+            account = await User.objects.aget(telegram_id=telegram_id)
+            result = interfaces.UserClaim(username= account.username, telegram_id=account.telegram_id)
             logger.info(f'result: {result}')
             return result
-        except ObjectDoesNotExist:
+        except User.DoesNotExist:
             logger.info(f"No user found with Telegram ID {telegram_id}")
             raise interfaces.UserNotFound(f"No user found with Telegram ID {telegram_id}")
+
 
     # def get_user_by_username(self, username) -> interfaces.UserClaim:
     #     try:
@@ -50,7 +49,8 @@ class AccountService(interfaces.AbstractAccountService):
     #     except ObjectDoesNotExist:
     #         raise interfaces.UserNotFound(f"No user found with username {username}")
 
-    def _convert_user_to_user_info(self, user: User) -> interfaces.UserInfo:
+    @staticmethod
+    def _convert_user_to_user_info(user: User) -> interfaces.UserInfo:
         return interfaces.UserInfo(
             username=user.username,
             email=user.email,

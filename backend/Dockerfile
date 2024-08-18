@@ -1,11 +1,9 @@
 ARG TAG=latest
 FROM nexus.runc.info/moneyro/baseimage:$TAG AS build_env
-#FROM nexus.runc.info/selenium/standalone-chrome:latest AS build_env
 
 RUN apt install --no-install-recommends -y \
     python3-dev \
     build-essential
-
 
 
 RUN python -m venv /venv

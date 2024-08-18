@@ -15,7 +15,7 @@ class BorrowedBookNotFound(Exception):
 
 class AddBookInput(BaseModel):
     title: str
-    author: str
+    writer: str
     quantity: int
     topic: Optional[str] = None
     publisher: Optional[str] = None
@@ -48,7 +48,7 @@ class BorrowBookOutput(BaseModel):
 
 class BookFilter(BaseModel):
     title: Optional[str] = None
-    author: Optional[str] = None
+    writer: Optional[str] = None
     topic: Optional[str] = None
     publisher: Optional[str] = None
     date_published: Optional[str] = None
@@ -75,7 +75,7 @@ class ReturnBookInput(BaseModel):
 class BookInfo(BaseModel):
     title: str
     id : str | None = None
-    author: str | None = None
+    writer: str | None = None
     quantity: int | None = None
     topic: str | None = None
     publisher: str | None = None

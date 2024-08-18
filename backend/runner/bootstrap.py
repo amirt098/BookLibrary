@@ -51,7 +51,7 @@ class Bootstrapper:
                                              **kwargs)
         _telegram_proxy = get_setting('telegram_proxy', **kwargs)
         _telegram_bot_token = get_setting('telegram_bot_token', **kwargs)
-        _telegram_admin_user_ids = get_list_setting('telegram_admin_user_ids', **kwargs)
+        # _telegram_admin_user_ids = get_list_setting('telegram_admin_user_ids', **kwargs)
 
         # externals
         _telegram_application_factory = kwargs.get('telegram_application_factory', TelegramApplicationFactory())
@@ -59,7 +59,7 @@ class Bootstrapper:
         self._account_service = kwargs.get('account_service', AccountService())
         self._borrowing_book_service = kwargs.get('borrowing_book_service', LibraryFacade())
 
-        self.telegram_bot = kwargs.get(
+        self._telegram_bot = kwargs.get(
             'telegram_bot_service',
             TelegramBotService(
                 telegram_application_factory=_telegram_application_factory,
@@ -68,6 +68,7 @@ class Bootstrapper:
                 account_service=self._account_service,
                 borrowing_book=self._borrowing_book_service,
                 date_time_utils=_date_time_utils,
+                token=_telegram_bot_token,
             )
                                        )
 
@@ -78,7 +79,7 @@ class Bootstrapper:
         return self._borrowing_book_service
 
     def get_telegram_bot(self):
-        return self.telegram_bot
+        return self._telegram_bot
 
 
 def get_bootstrapper(**kwargs) -> Bootstrapper:

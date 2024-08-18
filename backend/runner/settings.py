@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     'corsheaders',
 
     # local apps
-    'apps.book',
+    'apps.borrowing_book',
     'apps.account',
     'apps.telegram_bot',
 ]
@@ -59,6 +59,8 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+AUTH_USER_MODEL = 'account.User'
 
 ROOT_URLCONF = 'runner.urls'
 
@@ -152,7 +154,6 @@ REST_FRAMEWORK = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 CSRF_TRUSTED_ORIGINS = [
-    "https://*.extraxchange.com",
     "http://localhost:8000"
 ]
 

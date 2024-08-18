@@ -4,7 +4,7 @@ from enum import Enum
 from lib import data_classes as lib_dataclasses
 
 
-class UserClaim:
+class UserClaim(lib_dataclasses.BaseModel):
     username: str
     telegram_id: str | None = None
 
@@ -33,7 +33,7 @@ class AbstractAccountService(abc.ABC):
         """
         raise NotImplementedError
 
-    def telegram_authentication(self, telegram_id) -> UserClaim:
+    async def telegram_authentication(self, telegram_id) -> UserClaim:
         """
         Raise:
             UserNotFound

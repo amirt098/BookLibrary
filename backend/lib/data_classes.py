@@ -103,7 +103,6 @@ PersianNameField = Annotated[str, AfterValidator(validators.persian_name_field_v
 DomainField = Annotated[str, StringConstraints(pattern=r"^([a-zA-Z0-9_-]+)(?:\.[a-zA-Z0-9_-]+)+$")]
 PassportField = Annotated[str, StringConstraints(pattern=r'^[a-zA-Z0-9]{6,20}$')]
 DateField = Annotated[str, StringConstraints(pattern=r'[0-9]{4}-[0-9]{2}-[0-9]{2}')]
-CountryCodeField = Annotated[str, BeforeValidator(validators.validate_country_code)]
 TelephoneNumberField = Annotated[str, StringConstraints(pattern=r'^[\+][0-9]{7,14}$')]
 CurrencyField = str  # TODO: change this
 DecimalField = condecimal(allow_inf_nan=True)

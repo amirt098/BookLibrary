@@ -5,8 +5,8 @@ from typing import List
 from django.db import transaction
 from django.utils import timezone
 
-from models import Book, BorrowedBook
-import interfaces
+from .models import Book, BorrowedBook
+from . import  interfaces
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
             logger.info(f"Adding book with data: {input_data}")
             book, created = Book.objects.get_or_create(
                 title=input_data.title,
-                author=input_data.author,
+                writer=input_data.writer,
                 defaults={
                     'quantity': input_data.quantity,
                     'topic': input_data.topic,
@@ -89,8 +89,8 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
 
             if filters.title:
                 books = books.filter(title__contains=filters.title)
-            if filters.author:
-                books = books.filter(author__contains=filters.author)
+            if filters.writer:
+                books = books.filter(writer__contains=filters.writer)
             if filters.topic:
                 books = books.filter(topic__contains=filters.topic)
             if filters.publisher:
@@ -199,7 +199,7 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
         return interfaces.BookInfo(
             title=book.title,
             id=book.id,
-            author=book.author,
+            writer=book.writer,
             quantity=book.quantity,
             topic=book.topic,
             publisher=book.publisher,

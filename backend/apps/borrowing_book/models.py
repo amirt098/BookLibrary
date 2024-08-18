@@ -2,10 +2,9 @@ from django.db import models
 from django.utils import timezone
 
 
-# Book Model
 class Book(models.Model):
     title = models.CharField(max_length=255)
-    author = models.CharField(max_length=255)
+    writer = models.CharField(max_length=255)
     quantity = models.PositiveIntegerField(default=0)
     topic = models.CharField(max_length=100, null=True, blank=True)
     publisher = models.CharField(max_length=255, null=True, blank=True)

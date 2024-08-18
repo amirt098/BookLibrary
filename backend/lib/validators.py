@@ -4,7 +4,6 @@ import logging
 import uuid
 from pydantic_core import PydanticCustomError
 
-from .country_codes import countries
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +182,3 @@ def validate_uuid(value: str) -> str:
     return str(value)
 
 
-def validate_country_code(value: str) -> str:
-    if value not in countries.keys():
-        raise PydanticCustomError("value_error", "country code format is invalid.")
-
-    return value
