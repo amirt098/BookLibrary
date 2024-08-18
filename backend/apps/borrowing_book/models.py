@@ -6,7 +6,6 @@ from django.utils import timezone
 class Book(models.Model):
     title = models.CharField(max_length=255)
     author = models.CharField(max_length=255)
-    isbn = models.CharField(max_length=13, unique=True)
     quantity = models.PositiveIntegerField(default=0)
     topic = models.CharField(max_length=100, null=True, blank=True)
     publisher = models.CharField(max_length=255, null=True, blank=True)
@@ -16,16 +15,15 @@ class Book(models.Model):
         return self.title
 
 
-# BorrowedBook Model
 class BorrowedBook(models.Model):
     username = models.CharField(max_length=150)
-    book_name = models.CharField(max_length=255)
+    book_title = models.CharField(max_length=255)
     borrowed_date = models.DateTimeField(auto_now_add=True)
     return_date = models.DateTimeField(null=True, blank=True)
     due_date = models.DateTimeField()
 
     def __str__(self):
-        return f'{self.book_name} borrowed by {self.username}'
+        return f'{self.book_title} borrowed by {self.username}'
 
     def is_overdue(self):
         return timezone.now() > self.due_date

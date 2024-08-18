@@ -1,6 +1,6 @@
 import logging
 from datetime import timedelta
-from typing import Optional, Dict
+from typing import Optional
 from math import ceil
 
 from django.core.cache import cache
@@ -8,11 +8,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext, Updater, CallbackQueryHandler, CommandHandler, MessageHandler
 
 from apps.account import interfaces as account_interfaces
-from apps.borrowing_book import interfaces as book_interfaces
+from apps.borrowing_book import interfaces as borrowing_book_interfaces
+from apps.telegram_bot.models import Contact
 from externals.telegram_bot import interfaces as telegram_bot_interfaces
 from utils.date_time import interfaces as date_time_interfaces
-from pydantic import ValidationError
-import interfaces
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class TelegramBotService:
             telegram_api_address: str,
             telegram_proxy: Optional[str],
             account_service: account_interfaces.AbstractAccountService,
-            borrowing_book: book_interfaces.AbstractLibraryFacade,
+            borrowing_book: borrowing_book_interfaces.AbstractLibraryFacade,
             date_time_utils: date_time_interfaces.AbstractDateTimeUtils,
             token: str
     ):
@@ -32,23 +32,10 @@ class TelegramBotService:
         self.telegram_api_address = telegram_api_address
         self.telegram_proxy = telegram_proxy
         self.account_service = account_service
-        self.borrowing_book = borrowing_book
+        self.borrowing_book_service = borrowing_book
         self.date_time_utils = date_time_utils
         self.cache_timeout = timedelta(days=1)
         self.token = token
-
-        self.state_map: Dict[str, callable] = {
-            "start": self.show_welcome_message,
-            "books": self.show_book_list,
-            "register": self.register_user,
-            "borrow": self.borrow_book,
-            "unknown": self.handle_unknown,
-        }
-
-        self.command_map = {
-            "/start": "start",
-            "/books": "books",
-        }
 
     def start_polling(self):
         bot = self.telegram_application_factory.get_telegram_application(token=self.token)
@@ -80,6 +67,8 @@ class TelegramBotService:
                 user_claim = self.account_service.telegram_authentication(telegram_id=chat_id)
                 self._cache_user_claim(chat_id, user_claim)
             except account_interfaces.UserNotFound:
+                if Contact.objects.filter(chat_id=chat_id, status=Contact.STATUS_WAITING_FOR_USERNAME).exists():
+                    self.registration_username(update, context)
                 self.show_registration_prompt(update, context)
                 return
             except Exception as e:
@@ -93,16 +82,47 @@ class TelegramBotService:
             page = int(text.split("_")[1]) if "page_" in text else 1
             self.show_book_list(update, context, user_claim, page)
         elif text.startswith("show_"):
-            book_id = text.split("_")[1]
-            self.show_book_details(update, context, user_claim, book_id)
+            book_title = text.split("_")[1]
+            self.show_book_details(update, context, user_claim, book_title)
         elif text.startswith("borrow_"):
-            book_id = text.split("_")[1]
-            self.borrow_book(update, context, user_claim, book_id)
+            book_title = text.split("_")[1]
+            self.borrow_book(update, context, user_claim, book_title)
         elif text.startswith("return_"):
-            book_id = text.split("_")[1]
-            self.return_book(update, context, user_claim, book_id)
+            book_title = text.split("_")[1]
+            self.return_book(update, context, user_claim, book_title)
         else:
             self.handle_unknown(update, context)
+
+    def show_registration_prompt(self, update: Update, context: CallbackContext):
+        chat_id = update.message.chat_id
+        message = "Welcome for registration, please enter you username."
+        Contact.objects.create(chat_id=chat_id)
+        context.bot.send_message(chat_id=chat_id, text=message)
+
+    def registration_username(self, update:Update, context: CallbackContext):
+        try:
+            username = update.message.text
+            self.account_service.register_new_user(account_interfaces.UserInfo(
+                username=username,
+                first_name = update.message.chat.first_name,
+                last_name = update.message.chat.last_name,
+                mobile = update.message.contact.phone_number
+            ))
+            contact = Contact.objects.get(chat_id=update.message.chat.id)
+            contact.username = username
+            contact.save()
+            message = f'Registration complete welcome {update.message.chat.first_name}'
+        except Exception as e:
+            logger.debug(f'exception in get username: {e}')
+            message = str(e)
+        context.bot.send_message(chat_id=update.message.chat_id, text=message)
+
+
+    def show_registration_prompt(self, update: Update, context: CallbackContext):
+        chat_id = update.message.chat_id
+        message = "Welcome for registration, please enter you username."
+        Contact.objects.create(chat_id=chat_id)
+        context.bot.send_message(chat_id=chat_id, text=message)
 
     def show_welcome_message(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
                              *args):
@@ -117,8 +137,8 @@ class TelegramBotService:
         logger.info(f"Fetching and showing paginated book list to chat_id: {chat_id}, page: {page}")
 
         try:
-            books_per_page = 5  # Number of books per page
-            all_books = self.borrowing_book.get_books(user_claim=user_claim, filters={})  # Fetch all books
+            books_per_page = 5
+            all_books = self.borrowing_book_service.get_books(filters=borrowing_book_interfaces.BookFilter())
             total_pages = ceil(len(all_books) / books_per_page)
 
             start_index = (page - 1) * books_per_page
@@ -146,58 +166,56 @@ class TelegramBotService:
             context.bot.send_message(chat_id=chat_id, text="An error occurred while fetching the book list.")
 
     def show_book_details(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
-                          book_id: str):
-        chat_id = update.callback_query.message.chat_id
-        logger.info(f"User {user_claim.username} is viewing details for book {book_id}")
+                          book_title: str):
+        chat_id = update.callback_query.message.chat.id
+        logger.info(f"User {user_claim.username} is viewing details for book {book_title}")
 
         try:
-            book = self.borrowing_book.get_book_by_id(book_id)
+            book = self.borrowing_book_service.get_book_by_title(book_title)
             message = f"Title: {book.title}\nAuthor: {book.author}\nPublished: {book.published_date}\n\nDescription: {book.description}"
 
-            # Check if the user has already borrowed the book
-            if self.borrowing_book.has_user_borrowed_book(user_claim, book_id):
+            if self.borrowing_book_service.has_user_borrowed_book(user_claim, book_title):
                 buttons = [[InlineKeyboardButton("Return", callback_data=f"return_{book.id}")]]
             else:
                 buttons = [[InlineKeyboardButton("Borrow", callback_data=f"borrow_{book.id}")]]
 
             reply_markup = InlineKeyboardMarkup(buttons)
             context.bot.send_message(chat_id=chat_id, text=message, reply_markup=reply_markup)
-        except book_interfaces.BookNotFound:
-            context.bot.send_message(chat_id=chat_id, text="The selected book was not found.")
+        except borrowing_book_interfaces.BookNotFound:
+            context.bot.send_message(chat_id=chat_id, text=f"The selected book: {book_title} was not found.")
         except Exception as e:
             logger.error(f"Error fetching book details: {str(e)}")
             context.bot.send_message(chat_id=chat_id, text="An error occurred while fetching the book details.")
 
-    def register_user(self, update: Update, context: CallbackContext, *args):
-        chat_id = update.callback_query.message.chat_id
-        logger.info(f"Registering new user for chat_id: {chat_id}")
-
-        # Registration process here...
-        context.bot.send_message(chat_id=chat_id, text="You have been registered successfully!")
-
     def borrow_book(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
-                    book_id: str):
+                    book_title: str):
         chat_id = update.callback_query.message.chat_id
-        logger.info(f"User {user_claim.username} attempting to borrow book ID: {book_id}")
+        logger.info(f"User {user_claim.username} attempting to borrow book ID: {book_title}")
 
         try:
-            self.borrowing_book.borrow_book(user_claim=user_claim, book_id=book_id)
+            self.borrowing_book_service.borrow_book(
+                input_data=borrowing_book_interfaces.BorrowBookInput(
+                    username=user_claim.username, borrowed_book_title=book_title)
+            )
             context.bot.send_message(chat_id=chat_id, text="You have successfully borrowed the book!")
-        except book_interfaces.BookNotFound:
+        except borrowing_book_interfaces.BookNotFound:
             context.bot.send_message(chat_id=chat_id, text="The book was not found.")
         except Exception as e:
             logger.error(f"Error borrowing book: {str(e)}")
             context.bot.send_message(chat_id=chat_id, text="An error occurred while borrowing the book.")
 
     def return_book(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
-                    book_id: str):
+                    book_title: str):
         chat_id = update.callback_query.message.chat_id
-        logger.info(f"User {user_claim.username} attempting to return book ID: {book_id}")
+        logger.info(f"User {user_claim.username} attempting to return book ID: {book_title}")
 
         try:
-            self.borrowing_book.return_book(user_claim=user_claim, book_id=book_id)
+            self.borrowing_book_service.return_book(
+                input_data=borrowing_book_interfaces.ReturnBookInput(
+                    username=user_claim.username, borrowed_book_title=book_title)
+            )
             context.bot.send_message(chat_id=chat_id, text="You have successfully returned the book!")
-        except book_interfaces.BookNotFound:
+        except borrowing_book_interfaces.BookNotFound:
             context.bot.send_message(chat_id=chat_id, text="The book was not found.")
         except Exception as e:
             logger.error(f"Error returning book: {str(e)}")
@@ -205,5 +223,5 @@ class TelegramBotService:
 
     def handle_unknown(self, update: Update, context: CallbackContext, *args):
         chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
-        logger.info(f"Received unknown command from chat_id: {chat_id}")
+        logger.debug(f"Received unknown command from chat_id: {chat_id}")
         context.bot.send_message(chat_id=chat_id, text="Sorry, I didn't understand that command.")

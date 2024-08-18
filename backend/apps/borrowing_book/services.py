@@ -10,7 +10,8 @@ import interfaces
 
 logger = logging.getLogger(__name__)
 
-class LibraryFacade:
+
+class LibraryFacade(interfaces.AbstractLibraryFacade):
     def __init__(self):
         pass
 
@@ -20,7 +21,6 @@ class LibraryFacade:
             book, created = Book.objects.get_or_create(
                 title=input_data.title,
                 author=input_data.author,
-                isbn=input_data.isbn,
                 defaults={
                     'quantity': input_data.quantity,
                     'topic': input_data.topic,
@@ -40,21 +40,25 @@ class LibraryFacade:
                 publisher=book.publisher,
                 date_published=str(book.date_published) if book.date_published else None
             )
+        except Book.DoesNotExist:
+            logger.info(f'Book: {input_data.book_title} Not found')
+            interfaces.BookNotFound(f'Book: {input_data.book_title} Not found')
         except Exception as e:
             logger.error(f"Failed to add book: {str(e)}")
             raise e
 
-    def borrow_book(self, input_data: interfaces.BorrowBookInput, penalty_rate_per_day=0.5) -> interfaces.BorrowBookOutput:
+    def borrow_book(self, input_data: interfaces.BorrowBookInput,
+                    penalty_rate_per_day=0.5) -> interfaces.BorrowBookOutput:
         try:
             with transaction.atomic():
                 logger.info(f"Borrowing book with data: {input_data}")
-                book = Book.objects.get(id=input_data.book_id)
+                book = Book.objects.get(id=input_data.book_title)
                 if book.quantity > 0:
                     book.quantity -= 1
                     book.save()
                     borrowed_book = BorrowedBook.objects.create(
                         username=input_data.username,
-                        book_id=input_data.book_id,
+                        book_title=input_data.book_title,
                         due_date=input_data.due_date
                     )
                     penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
@@ -62,13 +66,18 @@ class LibraryFacade:
                     return interfaces.BorrowBookOutput(
                         id=borrowed_book.id,
                         username=input_data.username,
-                        book_id=input_data.book_id,
+                        book_title=input_data.book_title,
                         borrowed_date=str(borrowed_book.borrowed_date),
                         due_date=str(borrowed_book.due_date),
                         penalty=penalty
                     )
                 else:
-                    raise ValueError("Book is not available")
+                    logger.info(f'Book" {input_data.book_title} is not available')
+                    raise interfaces.BookNotAvailableException("Book is not available")
+        except Book.DoesNotExist:
+            logger.info(f'Book: {input_data.book_title} Not found')
+            interfaces.BookNotFound(f'Book: {input_data.book_title} Not found')
+
         except Exception as e:
             logger.error(f"Failed to borrow book: {str(e)}")
             raise e
@@ -82,8 +91,6 @@ class LibraryFacade:
                 books = books.filter(title__contains=filters.title)
             if filters.author:
                 books = books.filter(author__contains=filters.author)
-            if filters.isbn:
-                books = books.filter(isbn=filters.isbn)
             if filters.topic:
                 books = books.filter(topic__contains=filters.topic)
             if filters.publisher:
@@ -114,8 +121,8 @@ class LibraryFacade:
 
             if filters.username:
                 borrowed_books = borrowed_books.filter(username=filters.username)
-            if filters.book_id:
-                borrowed_books = borrowed_books.filter(book_id=filters.book_id)
+            if filters.book_title:
+                borrowed_books = borrowed_books.filter(book_title=filters.book_title)
             if filters.borrowed_date:
                 borrowed_books = borrowed_books.filter(
                     borrowed_date__date=datetime.strptime(filters.borrowed_date, '%Y-%m-%d').date()
@@ -125,7 +132,7 @@ class LibraryFacade:
                 interfaces.BorrowBookOutput(
                     id=borrowed_book.id,
                     username=borrowed_book.username,
-                    book_id=borrowed_book.book_name,
+                    book_title=borrowed_book.book_title,
                     borrowed_date=str(borrowed_book.borrowed_date),
                     due_date=str(borrowed_book.due_date),
                     penalty=borrowed_book.calculate_penalty(penalty_rate_per_day=0.5)
@@ -142,8 +149,8 @@ class LibraryFacade:
         try:
             with transaction.atomic():
                 logger.info(f"Returning book with data: {input_data}")
-                borrowed_book = BorrowedBook.objects.get(id=input_data.borrowed_book_id)
-                book = Book.objects.get(id=borrowed_book.book_name)
+                borrowed_book = BorrowedBook.objects.get(title=input_data.borrowed_book_title)
+                book = Book.objects.get(title=borrowed_book.book_title)
 
                 if book.quantity is not None:
                     book.quantity += 1
@@ -154,19 +161,48 @@ class LibraryFacade:
                 borrowed_book.save()
 
                 logger.info(f"Book returned: {borrowed_book} with penalty: {penalty}")
-                return interfaces.ReturnBookOutput(
+                result = interfaces.ReturnBookOutput(
                     id=borrowed_book.id,
                     username=input_data.username,
-                    book_id=borrowed_book.book_name,
+                    book_title=borrowed_book.book_title,
                     return_date=str(datetime.now().date()),
                     penalty=penalty
                 )
+                logger.info(f'result: {result}')
+                return result
+
         except BorrowedBook.DoesNotExist:
             logger.error("Borrowed book record not found.")
-            raise ValueError("Borrowed book record not found.")
+            raise interfaces.BorrowedBookNotFound("Borrowed book record not found.")
         except Book.DoesNotExist:
             logger.error("Book record not found.")
-            raise ValueError("Book record not found.")
+            raise interfaces.BookNotFound("Book record not found.")
         except Exception as e:
             logger.error(f"Failed to return book: {str(e)}")
             raise e
+
+    def get_book_by_title(
+            self,
+            book_title: str
+    ) -> interfaces.BookInfo:
+        try:
+            book = Book.objects.get(title=book_title)
+        except Book.DoesNotExist:
+            logger.info(f'book not found with title: {book_title}')
+            raise interfaces.BookNotFound(f'book not found with title: {book_title}')
+        result = self._convert_book_to_book_info(book)
+        logger.info(f'result: {result}')
+        return result
+
+    @staticmethod
+    def _convert_book_to_book_info(book: Book) -> interfaces.BookInfo:
+        return interfaces.BookInfo(
+            title=book.title,
+            id=book.id,
+            author=book.author,
+            quantity=book.quantity,
+            topic=book.topic,
+            publisher=book.publisher,
+            date_published=str(book.date_published),
+        )
+

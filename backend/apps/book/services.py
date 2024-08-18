@@ -12,7 +12,7 @@ class BookService(interfaces.AbstractBookService):
         logger.info(f"add_new_book called with: {book}, by user: {caller.username}")
 
         try:
-            existing_book = Book.objects.get(isbn=book.title)
+            existing_book = Book.objects.get(title=book.title)
             existing_book.quantity += book.quantity
             existing_book.save()
             logger.info(f"Existing book found, updated quantity: {existing_book.quantity}")
