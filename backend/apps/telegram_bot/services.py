@@ -1,7 +1,5 @@
-import asyncio
 import logging
 from datetime import timedelta
-from telnetlib import STATUS
 from typing import Optional
 from math import ceil
 
