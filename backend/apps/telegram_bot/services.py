@@ -1,16 +1,18 @@
 import logging
+import uuid
 from datetime import timedelta
 from typing import Optional
 from math import ceil
 
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
+from django.db import transaction
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext, Updater, CallbackQueryHandler, CommandHandler, MessageHandler
 
 from apps.account import interfaces as account_interfaces
 from apps.borrowing_book import interfaces as borrowing_book_interfaces
-from apps.telegram_bot.models import Contact
+from apps.telegram_bot.models import Contact, Process, Field
 from externals.telegram_bot import interfaces as telegram_bot_interfaces
 from utils.date_time import interfaces as date_time_interfaces
 
@@ -18,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramBotService:
+    OFFER_BOOK = "offer_book"
+    BOOK_TITLE = "BOOK_TITLE"
+
     def __init__(
             self,
             telegram_application_factory: telegram_bot_interfaces.AbstractTelegramApplicationFactory,
@@ -42,6 +47,20 @@ class TelegramBotService:
                               "/borrowed_books - View your borrowed books\n"
                               "/start - Start")
 
+        self.process_instruction = {
+            "offer_book": ['book_title', 'write', 'publisher', 'purchase_link']
+        }
+        self.process_final_step_mapper = {
+            "offer_book": self.offer_book_final_step
+        }
+        self.process_message_handler = {
+            "offer_book": {
+                Process.STATUS_INITIATE: "Please Enter the book title.",
+                'book_title': "please Enter the writer of book.",
+                "publisher": "please Enter the publisher of the book.",
+                "purchase_link": "please Enter link for purchasing the book."
+            }
+        }
 
     def start_polling(self):
         bot = self.telegram_application_factory.get_telegram_application(
@@ -56,16 +75,32 @@ class TelegramBotService:
         bot.run_polling()
         logger.info("Bot started polling.")
 
+    async def process_engine(
+            self,
+            update: Update,
+            context: CallbackContext,
+            user_claim: account_interfaces.UserClaim,
+            process_uid: str
+    ):
+        process = Process.objects.get(uid=process_uid)
+        if process.status == Process.STATUS_FINISHED:
+            # final step of process
+            await self.process_final_step_mapper.get(process.type)(update, context, user_claim, process)
+        message = self.process_message_handler[process.type][process.status]
+        # process_index = self.process_instruction[process.type].index(process.status)
+        process.step_counter += 1
+        process.status = self.process_instruction[process.type][process.step_counter]
+        await process.asave()
+        await context.bot.send_message(chat_id=user_claim.chat_id, text=message)
+        return
 
     @staticmethod
     def _get_cached_user_claim(telegram_id: int) -> Optional[account_interfaces.UserClaim]:
         return cache.get(f"user_claim_{telegram_id}")
 
-
     async def _cache_user_claim(self, telegram_id: int, user_claim: account_interfaces.UserClaim):
         logger.info(f'cache: {telegram_id}: {user_claim}')
         cache.set(f"user_claim_{telegram_id}", user_claim, 24 * 60 * 60)
-
 
     async def handler(self, update: Update, context: CallbackContext):
         chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
@@ -109,6 +144,8 @@ class TelegramBotService:
         elif text.startswith("/borrowed_books") or text.startswith("bb-page_"):
             page = int(text.split("_")[1]) if "bb-page_" in text else 1
             await self.show_borrowed_book_list(update, context, user_claim, page)
+        elif text.startswith("/offer_book"):
+            await self.offer_book_process(update, context, user_claim)
         elif text.startswith("show_"):
             book_title = text.split("_")[1]
             await self.show_book_details(update, context, user_claim, book_title)
@@ -124,14 +161,12 @@ class TelegramBotService:
         else:
             await self.handle_unknown(update, context)
 
-
     async def show_registration_prompt(self, update: Update, context: CallbackContext):
         chat_id = update.message.chat_id
         logger.info(f'registration: {chat_id}')
-        message = "Welcome for registration, please enter you username."
+        message = "Welcome for registration, please enter your username."
         await Contact.objects.acreate(chat_id=chat_id)
         await context.bot.send_message(chat_id=chat_id, text=message)
-
 
     async def registration_username(self, update: Update, context: CallbackContext):
         try:
@@ -162,7 +197,6 @@ class TelegramBotService:
             await context.bot.send_message(chat_id=update.message.chat_id, text=str(e))
             raise e
 
-
     async def show_welcome_message(self, update: Update, context: CallbackContext,
                                    user_claim: account_interfaces.UserClaim,
                                    *args):
@@ -170,7 +204,6 @@ class TelegramBotService:
         message = f"Welcome back, {user_claim.username}! You can now browse and borrow books.\n {self._command_text}"
         await context.bot.send_message(chat_id=chat_id, text=message)
         await self.show_book_list(update, context, user_claim)
-
 
     async def show_book_list(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
                              page: int = 1):
@@ -211,7 +244,6 @@ class TelegramBotService:
             await context.bot.send_message(chat_id=chat_id,
                                            text=f"An error occurred while fetching the book list.: {str(e)}")
 
-
     async def show_borrowed_book_list(self, update: Update, context: CallbackContext,
                                       user_claim: account_interfaces.UserClaim,
                                       page: int = 1):
@@ -231,7 +263,8 @@ class TelegramBotService:
             books = all_bb[start_index:end_index]
 
             buttons = [
-                [InlineKeyboardButton(f"{b_book.book_title} by {b_book.username}", callback_data=f"show-bb_{b_book.id}")]
+                [InlineKeyboardButton(f"{b_book.book_title} by {b_book.username}",
+                                      callback_data=f"show-bb_{b_book.id}")]
                 for b_book in books
             ]
 
@@ -251,7 +284,6 @@ class TelegramBotService:
             logger.error(f"Error fetching book list: {str(e)}")
             await context.bot.send_message(chat_id=chat_id,
                                            text=f"An error occurred while fetching the borrowed books list.: {str(e)}")
-
 
     async def show_book_details(self, update: Update, context: CallbackContext,
                                 user_claim: account_interfaces.UserClaim,
@@ -279,7 +311,6 @@ class TelegramBotService:
             await context.bot.send_message(chat_id=chat_id,
                                            text=f"An error occurred while fetching the book details. : {str(e)}")
 
-
     async def show_borrowed_book_details(self, update: Update, context: CallbackContext,
                                          user_claim: account_interfaces.UserClaim,
                                          borrowed_book_id: int):
@@ -304,7 +335,6 @@ class TelegramBotService:
             await context.bot.send_message(chat_id=chat_id,
                                            text=f"An error occurred while fetching the book details. : {str(e)}")
 
-
     async def borrow_book(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
                           book_title: str):
         chat_id = update.callback_query.message.chat_id
@@ -322,8 +352,8 @@ class TelegramBotService:
             await context.bot.send_message(chat_id=chat_id, text='The book is not available now.')
         except Exception as e:
             logger.error(f"Error borrowing book: {str(e)}")
-            await context.bot.send_message(chat_id=chat_id, text=f"An error occurred while borrowing the book. : {str(e)}")
-
+            await context.bot.send_message(chat_id=chat_id,
+                                           text=f"An error occurred while borrowing the book. : {str(e)}")
 
     async def return_book(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
                           book_title: str):
@@ -340,8 +370,8 @@ class TelegramBotService:
             await context.bot.send_message(chat_id=chat_id, text="The book was not found.")
         except Exception as e:
             logger.error(f"Error returning book: {str(e)}")
-            await context.bot.send_message(chat_id=chat_id, text=f"An error occurred while returning the book. {str(e)}")
-
+            await context.bot.send_message(chat_id=chat_id,
+                                           text=f"An error occurred while returning the book. {str(e)}")
 
     async def handle_unknown(self, update: Update, context: CallbackContext, *args):
         chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
@@ -351,3 +381,25 @@ class TelegramBotService:
             f"{self._command_text}"
         )
         await context.bot.send_message(chat_id=chat_id, text=commands)
+
+    def offer_book_final_step(
+            self,
+            update: Update,
+            context: CallbackContext,
+            user_claim: account_interfaces.UserClaim,
+            process_uid: str
+    ):
+        process = Process.objects.get(uid=process_uid)
+        process.Field
+
+    async def offer_book_process(self, update, context, user_claim):
+        contact = Contact.objects.aget(chat_id=user_claim.telegram_id)
+        process_uid = str(uuid.uuid4())
+        contact.process_uid = process_uid
+        await contact.asave()
+        process = Process.objects.create(
+            uid=process_uid,
+            type=Process.OFFER_BOOK_PROCESS
+        )
+        await self.process_engine(update=update, context=context, user_claim)
+
