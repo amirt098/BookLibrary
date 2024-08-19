@@ -9,7 +9,7 @@ class BookAdmin(admin.ModelAdmin):
 
 
 class BorrowedBookAdmin(admin.ModelAdmin):
-    list_display = "username", "book_title", "borrowed_date", "return_date", "due_date"
+    list_display = "username", "book_title", "borrowed_at", "return_at", "due_at"
     search_fields = ["username", "book_name"]
 
 

@@ -3,17 +3,25 @@ from datetime import datetime
 from typing import List
 
 from django.db import transaction
-from django.utils import timezone
+
+from utils.date_time import interfaces as date_time_interfaces
 
 from .models import Book, BorrowedBook
-from . import  interfaces
+from . import interfaces
+from ..telegram_bot.interfaces import BotIdentifier
 
 logger = logging.getLogger(__name__)
 
 
 class LibraryFacade(interfaces.AbstractLibraryFacade):
-    def __init__(self):
-        pass
+    def __init__(
+            self,
+            date_time_utils: date_time_interfaces.AbstractDateTimeUtils,
+            days_return_commitment: int = 7
+
+    ):
+        self.date_time_utils = date_time_utils
+        self.days_return_commitment_in_milliseconds = days_return_commitment * 24 * 60 * 60 * 1000
 
     def add_book(self, input_data: interfaces.AddBookInput) -> interfaces.AddBookOutput:
         try:
@@ -52,25 +60,22 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
         try:
             with transaction.atomic():
                 logger.info(f"Borrowing book with data: {input_data}")
-                book = Book.objects.get(id=input_data.book_title)
+                book = Book.objects.get(title=input_data.book_title)
                 if book.quantity > 0:
                     book.quantity -= 1
                     book.save()
                     borrowed_book = BorrowedBook.objects.create(
                         username=input_data.username,
                         book_title=input_data.book_title,
-                        due_date=input_data.due_date
+                        borrowed_at=self.date_time_utils.get_current_timestamp(),
+                        due_at=self.date_time_utils.get_current_timestamp() + self.days_return_commitment_in_milliseconds,
+
                     )
-                    penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
-                    logger.info(f"Book borrowed: {borrowed_book} with penalty: {penalty}")
-                    return interfaces.BorrowBookOutput(
-                        id=borrowed_book.id,
-                        username=input_data.username,
-                        book_title=input_data.book_title,
-                        borrowed_date=str(borrowed_book.borrowed_date),
-                        due_date=str(borrowed_book.due_date),
-                        penalty=penalty
-                    )
+                    # penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
+                    result = self._convert_borrowed_book_to_dataclass(borrowed_book)
+                    logger.info(f"Book borrowed: {result}")
+                    return result
+
                 else:
                     logger.info(f'Book" {input_data.book_title} is not available')
                     raise interfaces.BookNotAvailableException("Book is not available")
@@ -123,19 +128,12 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
                 borrowed_books = borrowed_books.filter(username=filters.username)
             if filters.book_title:
                 borrowed_books = borrowed_books.filter(book_title=filters.book_title)
-            if filters.borrowed_date:
-                borrowed_books = borrowed_books.filter(
-                    borrowed_date__date=datetime.strptime(filters.borrowed_date, '%Y-%m-%d').date()
-                )
+            if filters.return_at__isnull:
+                borrowed_books = borrowed_books.filter(return_at__isnull=filters.return_at__isnull)
 
             result = [
-                interfaces.BorrowBookOutput(
-                    id=borrowed_book.id,
-                    username=borrowed_book.username,
-                    book_title=borrowed_book.book_title,
-                    borrowed_date=str(borrowed_book.borrowed_date),
-                    due_date=str(borrowed_book.due_date),
-                    penalty=borrowed_book.calculate_penalty(penalty_rate_per_day=0.5)
+                (
+                    self._convert_borrowed_book_to_dataclass(borrowed_book)
                 ) for borrowed_book in borrowed_books
             ]
             logger.info(f"Borrowed books fetched: {result}")
@@ -149,24 +147,26 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
         try:
             with transaction.atomic():
                 logger.info(f"Returning book with data: {input_data}")
-                borrowed_book = BorrowedBook.objects.get(title=input_data.borrowed_book_title)
+                borrowed_book = BorrowedBook.objects.get(book_title=input_data.borrowed_book_title,
+                                                         username=input_data.username,
+                                                         return_at__isnull=True
+                                                         )
                 book = Book.objects.get(title=borrowed_book.book_title)
 
                 if book.quantity is not None:
                     book.quantity += 1
                     book.save()
 
-                penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
-                borrowed_book.borrowed_date = datetime.now().date()
+                # penalty = borrowed_book.calculate_penalty(penalty_rate_per_day)
+                borrowed_book.return_at = self.date_time_utils.get_current_timestamp()
                 borrowed_book.save()
 
-                logger.info(f"Book returned: {borrowed_book} with penalty: {penalty}")
+                logger.info(f"Book returned: {borrowed_book}")
                 result = interfaces.ReturnBookOutput(
                     id=borrowed_book.id,
                     username=input_data.username,
                     book_title=borrowed_book.book_title,
-                    return_date=str(datetime.now().date()),
-                    penalty=penalty
+                    return_at=borrowed_book.return_at,
                 )
                 logger.info(f'result: {result}')
                 return result
@@ -194,6 +194,19 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
         logger.info(f'result: {result}')
         return result
 
+    def get_borrowed_book_by_id(
+            self,
+            id: int,
+    ) -> interfaces.BorrowBookOutput:
+        try:
+            borrowed_book = BorrowedBook.objects.get(id=id)
+        except BorrowedBook.DoesNotExist:
+            logger.info(f'borrowed book not found with id: {id}')
+            raise interfaces.BorrowedBookNotFound(f"borrowed book not found with id: {id}'")
+        result = self._convert_borrowed_book_to_dataclass(borrowed_book)
+        logger.info(f'result: {result}')
+        return result
+
     @staticmethod
     def _convert_book_to_book_info(book: Book) -> interfaces.BookInfo:
         return interfaces.BookInfo(
@@ -206,3 +219,13 @@ class LibraryFacade(interfaces.AbstractLibraryFacade):
             date_published=str(book.date_published),
         )
 
+    @staticmethod
+    def _convert_borrowed_book_to_dataclass(borrowed_book: BorrowedBook) -> interfaces.BorrowBookOutput:
+        return interfaces.BorrowBookOutput(
+            id=borrowed_book.id,
+            username=borrowed_book.username,
+            book_title=borrowed_book.book_title,
+            borrowed_at=borrowed_book.borrowed_at,
+            return_at=borrowed_book.return_at,
+            due_at=borrowed_book.due_at,
+        )

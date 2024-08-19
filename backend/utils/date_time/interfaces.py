@@ -19,6 +19,9 @@ class DateTime(BaseModel):
     second: int = 0
     millisecond: int = 0
 
+    def get_str_ymd(self):
+        return f'{self.year}/{self.month}/{self.day}'
+
 
 class AbstractDateTimeUtils(abc.ABC):
     def get_current_timestamp(self) -> int:

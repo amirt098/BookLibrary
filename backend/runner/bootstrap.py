@@ -57,7 +57,9 @@ class Bootstrapper:
         _telegram_application_factory = kwargs.get('telegram_application_factory', TelegramApplicationFactory())
 
         self._account_service = kwargs.get('account_service', AccountService())
-        self._borrowing_book_service = kwargs.get('borrowing_book_service', LibraryFacade())
+        self._borrowing_book_service = kwargs.get('borrowing_book_service', LibraryFacade(
+            date_time_utils=_date_time_utils,
+        ))
 
         self._telegram_bot = kwargs.get(
             'telegram_bot_service',
