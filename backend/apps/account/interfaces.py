@@ -6,14 +6,14 @@ from lib import data_classes as lib_dataclasses
 
 class UserClaim(lib_dataclasses.BaseModel):
     username: str
-    telegram_id: str | None = None
+    telegram_id: int | None = None
 
 
 class UserInfo(lib_dataclasses.BaseModel):
     username: str
     email: str | None = None
     password: str | None = None
-    telegram_id: str | None = None
+    telegram_id: int | None = None
     first_name: str | None = None
     last_name: str | None = None
     mobile: str | None = None
