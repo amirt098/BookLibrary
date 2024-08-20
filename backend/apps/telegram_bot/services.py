@@ -12,16 +12,26 @@ from telegram.ext import CallbackContext, Updater, CallbackQueryHandler, Command
 
 from apps.account import interfaces as account_interfaces
 from apps.borrowing_book import interfaces as borrowing_book_interfaces
+from apps.offer_book import interfaces as offer_book_interfaces
+
 from apps.telegram_bot.models import Contact, Process, Field
 from externals.telegram_bot import interfaces as telegram_bot_interfaces
 from utils.date_time import interfaces as date_time_interfaces
 
 logger = logging.getLogger(__name__)
 
+OFFER_BOOK = "offer_book"
+OFFER_BOOK_TITLE = "offer_book_title"
+TOPIC = 'topic'
+WRITER = 'writer'
+PUBLISHER = 'publisher'
+PURCHASE_LINK = 'purchase_link'
+
+REGISTRATION = "registration"
+USERNAME = 'username'
+
 
 class TelegramBotService:
-    OFFER_BOOK = "offer_book"
-    BOOK_TITLE = "BOOK_TITLE"
 
     def __init__(
             self,
@@ -30,6 +40,7 @@ class TelegramBotService:
             telegram_proxy: Optional[str],
             account_service: account_interfaces.AbstractAccountService,
             borrowing_book: borrowing_book_interfaces.AbstractLibraryFacade,
+            offer_book: offer_book_interfaces.AbstractOfferBookService,
             date_time_utils: date_time_interfaces.AbstractDateTimeUtils,
             token: str
     ):
@@ -38,28 +49,40 @@ class TelegramBotService:
         self.telegram_proxy = telegram_proxy
         self.account_service = account_service
         self.borrowing_book_service = borrowing_book
+        self.offer_book_service = offer_book
         self.date_time_utils = date_time_utils
         self.cache_timeout = timedelta(days=1)
         self.token = token
 
         self._command_text = (" Here are some commands you can use:\n"
-                              "/books - View available books\n"
-                              "/borrowed_books - View your borrowed books\n"
-                              "/start - Start")
+                              "/books - View List of all books\n"
+                              "/borrowed_books - View List of borrowed books\n"
+                              "/offered_books - View List of offered books\n"
+                              "/offer_book - Start the process of offering a book\n"
+                              "/dismiss - Dismiss of any process \n"
+                              "/start - show this command again")
 
         self.process_instruction = {
-            "offer_book": ['book_title', 'write', 'publisher', 'purchase_link']
+            OFFER_BOOK: [
+                Process.STATUS_INITIATE,
+                OFFER_BOOK_TITLE, WRITER, TOPIC, PUBLISHER, PURCHASE_LINK,
+                Process.STATUS_FINISHED
+            ],
+
         }
         self.process_final_step_mapper = {
-            "offer_book": self.offer_book_final_step
+            OFFER_BOOK: self.offer_book_final_step,
+
         }
         self.process_message_handler = {
-            "offer_book": {
-                Process.STATUS_INITIATE: "Please Enter the book title.",
-                'book_title': "please Enter the writer of book.",
-                "publisher": "please Enter the publisher of the book.",
-                "purchase_link": "please Enter link for purchasing the book."
-            }
+            OFFER_BOOK: {
+                OFFER_BOOK_TITLE: "Please Enter your offer book title.",
+                WRITER: "Please Enter the author of book.",
+                TOPIC: "Please Enter the topic of the book.",
+                PUBLISHER: "Please Enter the publisher of the book.",
+                PURCHASE_LINK: "Please Enter link for purchasing the book."
+            },
+
         }
 
     def start_polling(self):
@@ -82,17 +105,26 @@ class TelegramBotService:
             user_claim: account_interfaces.UserClaim,
             process_uid: str
     ):
-        process = Process.objects.get(uid=process_uid)
-        if process.status == Process.STATUS_FINISHED:
-            # final step of process
-            await self.process_final_step_mapper.get(process.type)(update, context, user_claim, process)
-        message = self.process_message_handler[process.type][process.status]
-        # process_index = self.process_instruction[process.type].index(process.status)
+        process = await Process.objects.aget(uid=process_uid)
+        logger.info(f'user_claim: {user_claim}, process: {process}')
+        if process.status != Process.STATUS_INITIATE:
+            field = await Field.objects.acreate(
+                process=process,
+                name=process.status,
+                value=update.message.text
+            )
+            logger.info(f'field: {field}')
+
         process.step_counter += 1
         process.status = self.process_instruction[process.type][process.step_counter]
+        if process.status == Process.STATUS_FINISHED:
+            # final step of process
+            await self.process_final_step_mapper.get(process.type)(update, context, user_claim, process.uid)
+            return
+        message = self.process_message_handler[process.type][process.status]
+        logger.info(f'status: {process.status}, message: {message}')
         await process.asave()
-        await context.bot.send_message(chat_id=user_claim.chat_id, text=message)
-        return
+        await context.bot.send_message(chat_id=user_claim.telegram_id, text=message)
 
     @staticmethod
     def _get_cached_user_claim(telegram_id: int) -> Optional[account_interfaces.UserClaim]:
@@ -105,14 +137,6 @@ class TelegramBotService:
     async def handler(self, update: Update, context: CallbackContext):
         chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
         text = update.message.text if update.message else update.callback_query.data
-
-        if update.callback_query:
-            # Deleting the message associated with the callback query
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=update.callback_query.message.message_id)
-                await context.bot.answer_callback_query(update.callback_query.id)
-            except Exception as e:
-                logger.warning(f"Failed to delete callback query message: {e}")
 
         logger.info(f" \n\n\n >>>>>>>> Received input from chat_id: {chat_id}, text/data: {text} <<<<<<<<< \n\n\n")
 
@@ -135,8 +159,14 @@ class TelegramBotService:
                 logger.error(f"Error during authentication: {str(e)}")
                 await context.bot.send_message(chat_id=chat_id, text="An error occurred. Please try again.")
                 return
+        contact = await Contact.objects.aget(chat_id=user_claim.telegram_id)
+        if text.startswith("/dismiss"):
+            await self.handle_dismiss(update, context, user_claim, contact)
+        elif contact.process_uid:
+            logger.info(f'process: {contact.process_uid}')
+            await self.process_engine(update, context, user_claim, contact.process_uid)
 
-        if text.startswith("/start"):
+        elif text.startswith("/start"):
             await self.show_welcome_message(update, context, user_claim)
         elif text.startswith("/books") or text.startswith("page_"):
             page = int(text.split("_")[1]) if "page_" in text else 1
@@ -144,14 +174,20 @@ class TelegramBotService:
         elif text.startswith("/borrowed_books") or text.startswith("bb-page_"):
             page = int(text.split("_")[1]) if "bb-page_" in text else 1
             await self.show_borrowed_book_list(update, context, user_claim, page)
+        elif text.startswith("/offered_books") or text.startswith("ofb-page_"):
+            page = int(text.split("_")[1]) if "ofb-page_" in text else 1
+            await self.show_offered_books_list(update, context, user_claim, page)
         elif text.startswith("/offer_book"):
             await self.offer_book_process(update, context, user_claim)
-        elif text.startswith("show_"):
-            book_title = text.split("_")[1]
-            await self.show_book_details(update, context, user_claim, book_title)
         elif text.startswith("show-bb_"):
             borrowed_book_id = text.split("_")[1]
             await self.show_borrowed_book_details(update, context, user_claim, borrowed_book_id)
+        elif text.startswith("show-ofb_"):
+            offered_book_uid = text.split("_")[1]
+            await self.show_offered_book_details(update, context, user_claim, offered_book_uid)
+        elif text.startswith("show_"):
+            book_title = text.split("_")[1]
+            await self.show_book_details(update, context, user_claim, book_title)
         elif text.startswith("borrow_"):
             book_title = text.split("_")[1]
             await self.borrow_book(update, context, user_claim, book_title)
@@ -160,6 +196,14 @@ class TelegramBotService:
             await self.return_book(update, context, user_claim, book_title)
         else:
             await self.handle_unknown(update, context)
+
+        if update.callback_query:
+            # Deleting the message associated with the callback query
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=update.callback_query.message.message_id)
+                await context.bot.answer_callback_query(update.callback_query.id)
+            except Exception as e:
+                logger.warning(f"Failed to delete callback query message: {e}")
 
     async def show_registration_prompt(self, update: Update, context: CallbackContext):
         chat_id = update.message.chat_id
@@ -211,7 +255,7 @@ class TelegramBotService:
         logger.info(f"Fetching and showing paginated book list to chat_id: {chat_id}, page: {page}")
 
         try:
-            books_per_page = 5
+            books_per_page = 7
             all_books = await sync_to_async(
                 self.borrowing_book_service.get_books
             )(filters=borrowing_book_interfaces.BookFilter())
@@ -251,7 +295,7 @@ class TelegramBotService:
         logger.info(f"Fetching and showing paginated borrowed book list to chat_id: {chat_id}, page: {page}")
 
         try:
-            books_per_page = 5
+            books_per_page = 7
             all_bb = await sync_to_async(
                 self.borrowing_book_service.get_borrowed_books
             )(filters=borrowing_book_interfaces.BorrowedBookFilter())
@@ -334,6 +378,35 @@ class TelegramBotService:
             logger.error(f"Error fetching book details: {str(e)}")
             await context.bot.send_message(chat_id=chat_id,
                                            text=f"An error occurred while fetching the book details. : {str(e)}")
+    
+    async def show_offered_book_details(self, update: Update, context: CallbackContext,
+                                        user_claim: account_interfaces.UserClaim,
+                                        offered_book_uid: str):
+        chat_id = update.callback_query.message.chat.id
+        logger.info(f"User {user_claim.username} is viewing details for offered book uid {offered_book_uid}")
+
+        try:
+            offered_book = await sync_to_async(
+                self.offer_book_service.get_offered_book)(caller=user_claim, uid=offered_book_uid)
+
+
+            message = (
+                f'offered book title: {offered_book.offered_book_title}\n'
+                f'topic: {offered_book.topic}\n'
+                f'author: {offered_book.author}\n'
+                f'publisher: {offered_book.publisher}\n'
+                f'purchase link: {offered_book.purchase_link}\n'
+                f'is purchased: {offered_book.is_purchased}\n'
+                f'offered_at: {self.date_time_utils.convert_timestamp_to_date_time(offered_book.offered_at).get_str_ymd()}'
+            )
+            await context.bot.send_message(chat_id=chat_id, text=message)
+
+        except offer_book_interfaces.OfferedBookNotFound:
+            await context.bot.send_message(chat_id=chat_id, text=f"The selected offered book uid: {offered_book_uid} was not found.")
+        except Exception as e:
+            logger.error(f"Error fetching offered book details: {str(e)}")
+            await context.bot.send_message(chat_id=chat_id,
+                                           text=f"An error occurred while fetching the offered book details. : {str(e)}")
 
     async def borrow_book(self, update: Update, context: CallbackContext, user_claim: account_interfaces.UserClaim,
                           book_title: str):
@@ -382,24 +455,119 @@ class TelegramBotService:
         )
         await context.bot.send_message(chat_id=chat_id, text=commands)
 
-    def offer_book_final_step(
+    async def handle_dismiss(
+            self,
+            update: Update,
+            context: CallbackContext,
+            user_claim: account_interfaces.UserClaim,
+            contact: Contact,
+            *args
+    ):
+        contact.process_uid = None
+        await contact.asave()
+        chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
+        logger.debug(f"dismiss the process: {chat_id}")
+        commands = (
+            "Your process have been dismissed.\n\n"
+            f"{self._command_text}"
+        )
+        await context.bot.send_message(chat_id=chat_id, text=commands)
+
+    async def offer_book_final_step(
             self,
             update: Update,
             context: CallbackContext,
             user_claim: account_interfaces.UserClaim,
             process_uid: str
     ):
-        process = Process.objects.get(uid=process_uid)
-        process.Field
+        logger.info(f' offer book final step: {process_uid}')
+        process = await Process.objects.aget(uid=process_uid)
+        fields = Field.objects.filter(process=process)
+        offer_book_request = offer_book_interfaces.OfferBookRequest(
+            offered_book_title=[field.value async for field in fields if field.name == OFFER_BOOK_TITLE][0],
+            topic=[field.value async for field in fields if field.name == TOPIC][0],
+            author=[field.value async for field in fields if field.name == WRITER][0],
+            publisher=[field.value async for field in fields if field.name == PUBLISHER][0],
+            proposer=user_claim.username,
+            purchase_link=[field.value async for field in fields if field.name == PURCHASE_LINK][0],
+        )
+        result = await self.offer_book_service.async_add_offer_book(caller=user_claim, request=offer_book_request)
+        message = (
+            f'offered book title: {result.offered_book_title}\n'
+            f'topic: {result.topic}\n'
+            f'author: {result.author}\n'
+            f'publisher: {result.publisher}\n'
+            f'purchase link: {result.purchase_link}\n'
+            f'is purchased: {result.is_purchased}\n'
+            f'offered_at: {self.date_time_utils.convert_timestamp_to_date_time(result.offered_at).get_str_ymd()}'
+        )
+        await context.bot.send_message(chat_id=update.message.chat_id, text=message)
+        contact = await Contact.objects.aget(chat_id=user_claim.telegram_id)
+        contact.process_uid = None
+        await contact.asave()
 
     async def offer_book_process(self, update, context, user_claim):
-        contact = Contact.objects.aget(chat_id=user_claim.telegram_id)
+        contact = await Contact.objects.aget(chat_id=user_claim.telegram_id)
         process_uid = str(uuid.uuid4())
         contact.process_uid = process_uid
         await contact.asave()
-        process = Process.objects.create(
+        process = await Process.objects.acreate(
             uid=process_uid,
-            type=Process.OFFER_BOOK_PROCESS
+            type=OFFER_BOOK,
+            status=Process.STATUS_INITIATE,
         )
-        await self.process_engine(update=update, context=context, user_claim)
+        logger.info(f'process: {process}')
+        await self.process_engine(update=update, context=context, user_claim=user_claim, process_uid=process.uid)
+
+    async def show_offered_books_list(
+            self,
+            update: Update,
+            context: CallbackContext,
+            user_claim: account_interfaces.UserClaim,
+            page: int = 1
+    ):
+        chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
+        logger.info(f"Fetching and showing paginated borrowed book list to chat_id: {chat_id}, page: {page}")
+
+        try:
+            objects_per_page = 10
+            offer_books = await self.offer_book_service.async_get_offer_books(
+                caller=user_claim,
+                filters=offer_book_interfaces.OfferBookFilters(
+                    limit=objects_per_page,
+                    offset=(page - 1) * objects_per_page
+                )
+            )
+            total_pages = ceil(offer_books.count / objects_per_page)
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        f"{offer_book.offered_book_title}-{offer_book.author} by {offer_book.proposer}",
+                        callback_data=f"show-ofb_{offer_book.uid}"
+                    )
+                ]
+                for offer_book in offer_books.results
+            ]
+            navigation_buttons = []
+            if page > 1:
+                navigation_buttons.append(InlineKeyboardButton("Previous", callback_data=f"ofb-page_{page - 1}"))
+            if page < total_pages:
+                navigation_buttons.append(InlineKeyboardButton("Next", callback_data=f"ofb-page_{page + 1}"))
+
+            if navigation_buttons:
+                buttons.append(navigation_buttons)
+
+            reply_markup = InlineKeyboardMarkup(buttons)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Here are the Offered books:",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.error(f"Error fetching book list: {str(e)}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"An error occurred while fetching the offered books list.: {str(e)}"
+            )
+            raise e
 

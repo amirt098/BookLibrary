@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'apps.borrowing_book',
     'apps.account',
     'apps.telegram_bot',
+    'apps.offer_book'
 ]
 
 MIDDLEWARE = [

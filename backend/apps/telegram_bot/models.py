@@ -14,7 +14,7 @@ class Contact(models.Model):
     mobile = models.CharField(max_length=15, null=True, blank=True)
     chat_id = models.CharField(max_length=50, unique=True)
     status = models.CharField(max_length=50, choices=status_choices, default=STATUS_WAITING_FOR_USERNAME)
-    process_uid = models.CharField(max_length=150, null=True)
+    process_uid = models.CharField(max_length=150, null=True, blank=True)
 
 
 class Process(models.Model):
@@ -30,8 +30,13 @@ class Process(models.Model):
     status = models.CharField(max_length=50, null=True)
     step_counter = models.IntegerField(default=0)
 
+    def __str__(self):
+        return f'uid: {self.uid}, type: {self.type}, status: {self.status}, step_counter: {self.step_counter}'
 
 class Field(models.Model):
     name = models.CharField(max_length=30)
     value = models.CharField(max_length=50)
     process = models.ForeignKey(Process, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f'{self.process.uid}, {self.name}, {self.value}'

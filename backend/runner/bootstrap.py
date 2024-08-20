@@ -6,6 +6,8 @@ from apps.account.interfaces import AbstractAccountService
 from apps.account.services import AccountService
 from apps.borrowing_book.interfaces import AbstractLibraryFacade
 from apps.borrowing_book.services import LibraryFacade
+from apps.offer_book.interfaces import AbstractOfferBookService
+from apps.offer_book.services import OfferBookService
 from apps.telegram_bot.services import TelegramBotService
 # apps abstractions
 
@@ -60,6 +62,9 @@ class Bootstrapper:
         self._borrowing_book_service = kwargs.get('borrowing_book_service', LibraryFacade(
             date_time_utils=_date_time_utils,
         ))
+        self._offer_book_service = kwargs.get("offer_book_service", OfferBookService(
+            date_time_service=_date_time_utils,
+        ))
 
         self._telegram_bot = kwargs.get(
             'telegram_bot_service',
@@ -69,6 +74,7 @@ class Bootstrapper:
                 telegram_proxy=_telegram_proxy,
                 account_service=self._account_service,
                 borrowing_book=self._borrowing_book_service,
+                offer_book=self._offer_book_service,
                 date_time_utils=_date_time_utils,
                 token=_telegram_bot_token,
             )
@@ -82,6 +88,9 @@ class Bootstrapper:
 
     def get_telegram_bot(self):
         return self._telegram_bot
+
+    def get_offer_book_service(self) -> AbstractOfferBookService:
+        return self._offer_book_service
 
 
 def get_bootstrapper(**kwargs) -> Bootstrapper:
